@@ -12,43 +12,27 @@ module PlayerComponent where
 
 import Prelude
 
-import Affjax (Request)
-import Affjax as Affjax
-import Affjax.ResponseFormat as AffResp
 import Audio.SoundFont (Instrument, playNotes, instrumentChannels)
 import Audio.SoundFont.Melody (Melody, MidiPhrase)
 import Audio.SoundFont.Melody.Class (class Playable, toMelody)
-import Control.Monad.State.Class (class MonadState, state)
-import Data.Argonaut (Json)
 import Data.Array (null, index, length)
-import Data.Either (Either(..))
-import Data.Euterpea.Midi.MEvent (perform)
-import Data.Euterpea.Music (Music, Pitch, (:+:), (:=:))
-import Data.Euterpea.Notes (a, b, bn, c, d, e, f, g, wn)
 import Data.Generic.Rep (class Generic)
 import Data.Generic.Rep.Eq (genericEq)
 import Data.Generic.Rep.Show (genericShow)
-import Data.HTTP.Method (Method(..))
 import Data.Int (toNumber)
 import Data.Maybe (Maybe(..))
-import Data.Maybe (Maybe(..), isJust)
 import Data.Time.Duration (Milliseconds(..))
-import Data.Tuple (Tuple(..))
+import Data.Tuple (Tuple)
 import Data.Tuple.Nested ((/\))
 import Effect (Effect)
-import Effect (Effect)
 import Effect.Aff (Aff, delay, launchAff_)
-import Effect.Aff.Class (class MonadAff, liftAff)
-import Effect.Class (class MonadEffect, liftEffect)
-import Effect.Exception (throw)
-import React.Basic.DOM (p, render)
+import Effect.Class (liftEffect)
 import React.Basic.DOM as DOM
+import React.Basic.Events (handler_)
 import React.Basic.Hooks (Component)
 import React.Basic.Hooks as React
-import Web.DOM.NonElementParentNode (getElementById)
-import Web.HTML (window)
-import Web.HTML.HTMLDocument (toNonElementParentNode)
-import Web.HTML.Window (document)
+
+
 
 data PlayBackState =
     PLAYING
@@ -83,6 +67,8 @@ newtype State p = State
     , phraseIndex :: Int
     , phraseLength :: Number
     , playable :: p
+    , nextAction :: Maybe (Action p)
+    , playNum :: Number
     }
 
 reducer :: forall p. Playable p => State p -> Action2 p -> State p
@@ -128,12 +114,12 @@ runAction (State state) (HandleNewPlayable playable') = do
 
 playAudio :: forall p. Playable p => ((Action2 p) -> Effect Unit) -> State p -> Maybe (Action p) -> Effect Unit
 playAudio dispatch (State state) nextAction = launchAff_ do
-    case state.playing, nextAction of
-        PLAYING, Just action -> do
-            nextState /\ newAction <- runAction (State state) action
-            _ <- liftEffect $ dispatch (SetState nextState)
-            liftEffect $ (playAudio dispatch nextState newAction)
-        _, _ -> pure unit
+    case nextAction of
+        Just action -> do
+            (State nextState) /\ newAction <- runAction (State state) action
+            let stateWithAction = State (nextState {nextAction = newAction, playNum = nextState.playNum + 1.0})
+            liftEffect $ dispatch (SetState stateWithAction)
+        _ -> pure unit
 
 initialState :: forall p. Playable p => Array Instrument -> p -> State p
 initialState instruments playable = 
@@ -144,6 +130,8 @@ initialState instruments playable =
         , phraseIndex : 0
         , phraseLength : 0.0
         , playable : playable
+        , nextAction : Nothing
+        , playNum : 0.0
         }
 
 establishMelody :: forall p. Playable p => State p -> (State p)
@@ -204,15 +192,41 @@ component playable instruments =
             pauseImg = "assets/images/pause.png"
             playAction =
                 if (state.playing == PLAYING) then
-                    PlayMelody PAUSED
+                    PlayMelody PLAYING
                 else 
                     PlayMelody PLAYING
             playButtonImg =
                 if (state.playing == PLAYING) then 
-                    startImg
+                    pauseImg
                 else
-                    pauseImg 
+                    startImg 
             isDisabled = (state.playing == PENDINGPAUSED)
-
-        pure $ DOM.div {}
+        
+        React.useEffect state.playNum $ do
+            playAudio dispatch (State state) (state.nextAction)
+            pure (pure unit) 
+        pure $ DOM.div {
+            children : 
+                [ DOM.div {
+                    children : 
+                        [ DOM.input 
+                            { type : "image"
+                            , disabled : isDisabled
+                            , src : playButtonImg
+                            , onClick :handler_ (playAudio dispatch (State state) (Just playAction))
+                            }
+                        , DOM.input 
+                            { type: "image"
+                            , disabled : isDisabled
+                            , src : stopImg
+                            , onClick : handler_ (playAudio dispatch (State state) (Just StopMelody))
+                            }
+                        , DOM.progress 
+                            { max : capsuleMax
+                            , value : show sliderPos
+                            }
+                        ]
+                 }
+                ]
+        }
     )
